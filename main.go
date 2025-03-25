@@ -27,7 +27,13 @@ func main() {
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
 			{
-				Name:   "pull",
+				Name: "pull",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "branch",
+						Usage: "the branch of the repository to use as default.",
+					},
+				},
 				Usage:  "pull config from remote.",
 				Action: pullFunc,
 			},
@@ -64,7 +70,7 @@ func main() {
 }
 
 func addFunc(ctx context.Context, cmd *cli.Command) error {
-	if cmd.NArg() == 0 {
+	if cmd.NArg() < 1 {
 		fmt.Println("please input valid config.")
 		return errors.New("incorrect config")
 	}
@@ -201,8 +207,11 @@ func pullFunc(ctx context.Context, cmd *cli.Command) error {
 		fmt.Println("please input valid config.")
 		return errors.New("incorrect config")
 	}
-
 	conf := cmd.Args().Get(0)
+	if len(conf) == 0 {
+		fmt.Println("please input valid config.")
+		return errors.New("incorrect config")
+	}
 
 	fmt.Printf("pulling latest for config: %s\n", conf)
 	homeDir := os.Getenv("HOME")
@@ -213,6 +222,18 @@ func pullFunc(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	var branchRef string
+	branch, err := gitRepo.Head()
+	branchRef = branch.Name().String()
+	if err != nil {
+		fmt.Printf("error getting repo branch. err %+v", err)
+		return err
+	}
+	if len(cmd.String("branch")) != 0 {
+		branchRef = fmt.Sprintf("refs/heads/%s", cmd.String("branch"))
+	}
+	fmt.Printf("branch ref: %s.\n", branch.Name())
+
 	workTree, err := gitRepo.Worktree()
 	if err != nil {
 		fmt.Printf("error getting git work tree. err: %s", err)
@@ -221,10 +242,15 @@ func pullFunc(ctx context.Context, cmd *cli.Command) error {
 
 	err = workTree.Pull(&git.PullOptions{
 		// Force:        true,
-		SingleBranch: true,
-		Progress:     os.Stdout,
+		// SingleBranch: true,
+		Progress:      os.Stdout,
+		RemoteName:    "origin",
+		ReferenceName: plumbing.ReferenceName(branchRef),
 	})
-	if err != nil {
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		fmt.Println("cofig repo already up to date.")
+		return err
+	} else if err != nil {
 		fmt.Printf("error pulling latest config. err: %s", err)
 		return err
 	}
