@@ -10,11 +10,14 @@ import (
 	"path"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/urfave/cli/v3"
+
+	reconConfig "github.com/jzho987/recon/config"
 )
 
 const (
@@ -61,6 +64,21 @@ func main() {
 				Usage:  "add new config.",
 				Action: addFunc,
 			},
+			{
+				Name: "config",
+				Commands: []*cli.Command{
+					{
+						Name: "get",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+
+							rcfg, err := reconConfig.GetConfigFromFile()
+							spew.Dump(rcfg)
+
+							return err
+						},
+					},
+				},
+			},
 		},
 	}
 	err := cmd.Run(context.Background(), os.Args)
@@ -70,6 +88,8 @@ func main() {
 }
 
 func addFunc(ctx context.Context, cmd *cli.Command) error {
+	var newRepoConfig reconConfig.RepoConfig
+
 	if cmd.NArg() < 1 {
 		fmt.Println("please input valid config.")
 		return errors.New("incorrect config")
@@ -79,12 +99,14 @@ func addFunc(ctx context.Context, cmd *cli.Command) error {
 		fmt.Println("please input valid config.")
 		return errors.New("incorrect config")
 	}
+	newRepoConfig.Name = conf
 
 	if len(cmd.String("repo")) == 0 {
 		fmt.Println("please input repo using --repo.")
 		return errors.New("missing required flag")
 	}
 	repo := cmd.String("repo")
+	newRepoConfig.Remote = repo
 
 	homeDir := os.Getenv("HOME")
 	gitDir := path.Join(homeDir, GIT_DIRS)
@@ -150,6 +172,10 @@ func addFunc(ctx context.Context, cmd *cli.Command) error {
 			fmt.Printf("error checking out branch. err: %s", err)
 			return err
 		}
+
+		branch := cmd.String("branch")
+		newRepoConfig.Branch = &branch
+
 		fmt.Printf("successfully, switched to branch: %s;\n", cmd.String("branch"))
 	}
 
@@ -196,6 +222,19 @@ func addFunc(ctx context.Context, cmd *cli.Command) error {
 	err = os.Symlink(cloneDir, configPath)
 	if err != nil {
 		fmt.Printf("error creating symlink from %s to %s. err: %+v", cloneDir, configPath, err)
+		return err
+	}
+
+	rcfg, err := reconConfig.GetConfigFromFile()
+	if err != nil {
+		fmt.Printf("error reading config file. err: %s", err)
+		return err
+	}
+
+	rcfg.Repos = append(rcfg.Repos, newRepoConfig)
+	err = reconConfig.SaveConfigToFile(*rcfg)
+	if err != nil {
+		fmt.Printf("error saving config file. err: %s", err)
 		return err
 	}
 
