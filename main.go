@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/urfave/cli/v3"
@@ -18,9 +19,8 @@ import (
 
 const (
 	BASE_CONFIG_DIR = ".config"
-	CONFIG_DIR      = "/.config/recon/"
 	GIT_DIRS        = ".config/recon/git-dirs/"
-	DB_FILE         = "/.config/recon/.data"
+	DB_FILE         = ".config/recon/.data"
 )
 
 func main() {
@@ -54,11 +54,6 @@ func main() {
 				},
 				Usage:  "add new config.",
 				Action: addFunc,
-			},
-			{
-				Name:   "init",
-				Usage:  "initialize config path for all reconfigured tools.",
-				Action: initFunc,
 			},
 		},
 	}
@@ -132,15 +127,18 @@ func addFunc(ctx context.Context, cmd *cli.Command) error {
 			return errors.New("nil work tree")
 		}
 		err = gitRepo.Fetch(&git.FetchOptions{
-			Prune: true,
+			Prune:    true,
+			RefSpecs: []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD"},
 		})
 		if err != nil {
 			fmt.Printf("error fetching from git repository. err: %+v\n", err)
 			return err
 		}
 
+		branchRef := fmt.Sprintf("refs/heads/%s", cmd.String("branch"))
 		err = workTree.Checkout(&git.CheckoutOptions{
-			Branch: plumbing.ReferenceName(cmd.String("branch")),
+			Branch: plumbing.ReferenceName(branchRef),
+			Force:  true,
 		})
 		if err != nil {
 			fmt.Printf("error checking out branch. err: %s", err)
@@ -199,59 +197,38 @@ func addFunc(ctx context.Context, cmd *cli.Command) error {
 }
 
 func pullFunc(ctx context.Context, cmd *cli.Command) error {
-	if cmd.Args().Len() == 0 {
+	if cmd.NArg() < 1 {
 		fmt.Println("please input valid config.")
 		return errors.New("incorrect config")
 	}
+
 	conf := cmd.Args().Get(0)
-	if len(conf) == 0 {
-		fmt.Println("please input valid config.")
-		return errors.New("incorrect config")
-	}
 
-	fmt.Printf("config: %s;", conf)
-	return nil
-}
-
-func initFunc(ctx context.Context, cmd *cli.Command) error {
+	fmt.Printf("pulling latest for config: %s\n", conf)
 	homeDir := os.Getenv("HOME")
-	dataPath := path.Join(homeDir, DB_FILE)
-	err := putAndWriteFile(dataPath, []byte{})
+	repoPath := path.Join(homeDir, GIT_DIRS, conf)
+	gitRepo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		fmt.Printf("error creating data file. err: %+v", err)
+		fmt.Printf("error opening git repository. err %+v", err)
 		return err
 	}
 
-	data, err := os.ReadFile(dataPath)
+	workTree, err := gitRepo.Worktree()
 	if err != nil {
-		fmt.Printf("error reading file. err: %+v", err)
+		fmt.Printf("error getting git work tree. err: %s", err)
 		return err
 	}
 
-	fmt.Printf("%s\n", data)
-
-	return nil
-}
-
-func putAndWriteFile(filePath string, data []byte) error {
-	_, err := os.Stat(filePath)
-	if errors.Is(err, os.ErrNotExist) {
-		dirPath := path.Dir(filePath)
-		err := os.MkdirAll(dirPath, os.ModePerm)
-		if err != nil {
-			fmt.Println("error handling data file.")
-			return err
-		}
-	} else if err != nil {
-		fmt.Printf("error handling data file. err: %+v", err)
-		return err
-	}
-
-	err = os.WriteFile(filePath, data, os.ModePerm)
+	err = workTree.Pull(&git.PullOptions{
+		// Force:        true,
+		SingleBranch: true,
+		Progress:     os.Stdout,
+	})
 	if err != nil {
-		fmt.Println("error writing data file.")
+		fmt.Printf("error pulling latest config. err: %s", err)
 		return err
 	}
+	fmt.Println("finished pulling latest config")
 
 	return nil
 }
