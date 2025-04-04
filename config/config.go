@@ -1,10 +1,13 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/urfave/cli"
 )
 
 const (
@@ -41,6 +44,24 @@ type RepoConfig struct {
 	// Optional: alternative path to use for config.
 	// by default, the config path used to create the symlink if: $HOME/.config/<config-name>
 	Path *string `toml:"path"`
+}
+
+func NewConfigCommand() cli.Command {
+	return cli.Command{
+		Name:  "config",
+		Usage: "debug configurations.",
+		Commands: []*cli.Command{
+			{
+				Name: "get",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					rcfg, err := GetConfigFromFile()
+					spew.Dump(rcfg)
+
+					return err
+				},
+			},
+		},
+	}
 }
 
 func GetConfigFromFile() (*ReconConfig, error) {
