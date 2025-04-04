@@ -7,7 +7,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/pelletier/go-toml/v2"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v3"
 )
 
 const (
