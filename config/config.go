@@ -31,7 +31,7 @@ type RepoConfig struct {
 
 	// Optional: alternative path to use for config.
 	// by default, the config path used to create the symlink if: $HOME/.config/<config-name>
-	Path *string `tom:"path"`
+	Path *string `toml:"path"`
 }
 
 func GetConfigFromFile() (*ReconConfig, error) {
@@ -50,21 +50,4 @@ func GetConfigFromFile() (*ReconConfig, error) {
 	}
 
 	return &config, nil
-}
-
-func SaveConfigToFile(rcfg ReconConfig) error {
-	homeDir := os.Getenv("HOME")
-	configFilePath := path.Join(homeDir, RECON_CONFIG_FILE)
-
-	toml, err := toml.Marshal(rcfg)
-	if err != nil {
-		return err
-	}
-
-	err = os.WriteFile(configFilePath, toml, os.ModePerm)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }

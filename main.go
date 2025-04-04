@@ -6,18 +6,17 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/urfave/cli/v3"
 
 	reconConfig "github.com/jzho987/recon/config"
+	"github.com/jzho987/recon/util"
 )
 
 const (
@@ -29,41 +28,6 @@ const (
 func main() {
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
-			{
-				Name: "pull",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  "branch",
-						Usage: "the branch of the repository to use as default.",
-					},
-				},
-				Usage:  "pull config from remote.",
-				Action: pullFunc,
-			},
-			{
-				Name: "add",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  "repo",
-						Usage: "the repository of which the configuration file lives in, either in the root or in a sub directory.",
-					},
-					&cli.StringFlag{
-						Name:  "path",
-						Usage: "the path of the config file within the remote repo. by default it uses the root of the repository as the config path.",
-						Value: "",
-					},
-					&cli.StringFlag{
-						Name:  "config",
-						Usage: "the path of the config file to replace. by default it is ~/.config/<arg_1>/...",
-					},
-					&cli.StringFlag{
-						Name:  "branch",
-						Usage: "the branch of the repository to use as default.",
-					},
-				},
-				Usage:  "add new config.",
-				Action: addFunc,
-			},
 			{
 				Name: "config",
 				Commands: []*cli.Command{
@@ -79,6 +43,17 @@ func main() {
 					},
 				},
 			},
+			{
+				Name: "sync",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "config",
+						Usage: "the specific config to sync",
+					},
+				},
+				Usage:  "sync configured remote configs with current config.",
+				Action: syncFunc,
+			},
 		},
 	}
 	err := cmd.Run(context.Background(), os.Args)
@@ -87,213 +62,169 @@ func main() {
 	}
 }
 
-func addFunc(ctx context.Context, cmd *cli.Command) error {
-	var newRepoConfig reconConfig.RepoConfig
-
-	if cmd.NArg() < 1 {
-		fmt.Println("please input valid config.")
-		return errors.New("incorrect config")
+func syncFunc(ctx context.Context, cmd *cli.Command) error {
+	rcfg, err := reconConfig.GetConfigFromFile()
+	if err != nil {
+		fmt.Printf("errors getting config from file. err: %s", err)
+		return err
 	}
-	conf := cmd.Args().Get(0)
-	if len(conf) == 0 {
-		fmt.Println("please input valid config.")
-		return errors.New("incorrect config")
-	}
-	newRepoConfig.Name = conf
+	repoConfigs := rcfg.Repos
 
-	if len(cmd.String("repo")) == 0 {
-		fmt.Println("please input repo using --repo.")
-		return errors.New("missing required flag")
-	}
-	repo := cmd.String("repo")
-	newRepoConfig.Remote = repo
+	if len(cmd.String("config")) != 0 {
+		conf := cmd.String("config")
+		var filtered *reconConfig.RepoConfig
+		for _, repoConfig := range repoConfigs {
+			if repoConfig.Name != conf {
+				continue
+			}
 
+			filtered = &repoConfig
+			break
+		}
+
+		if filtered == nil {
+			fmt.Printf("config %s not found in recon.toml.\n", conf)
+			return errors.New("missing config")
+		}
+
+		repoConfigs = []reconConfig.RepoConfig{*filtered}
+	}
+
+	// get existing git dirs
 	homeDir := os.Getenv("HOME")
 	gitDir := path.Join(homeDir, GIT_DIRS)
-
-	fmt.Printf("creating directory: %s;\n", gitDir)
-	command := exec.Command("mkdir", "-p", gitDir)
-	command.Stdout = os.Stdout
-	err := command.Run()
+	entries, err := os.ReadDir(gitDir)
 	if err != nil {
-		fmt.Printf("error creating directory for new cofig; err: %+v;\n", err)
 		return err
 	}
-	cloneDir := path.Join(gitDir, conf)
 
+	// dedupe desired dirs
+	existingDirSet := make(map[string]bool, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		existingDirSet[entry.Name()] = true
+	}
+
+	missingDirs := make([]reconConfig.RepoConfig, 0)
+	existingDirs := make([]reconConfig.RepoConfig, 0)
+	for _, repoConfig := range repoConfigs {
+		labeledDirName := util.GetLabeledDirName(repoConfig)
+		if existingDirSet[labeledDirName] {
+			existingDirs = append(existingDirs, repoConfig)
+			continue
+		}
+		missingDirs = append(missingDirs, repoConfig)
+	}
+
+	fmt.Printf("found %d missing repos.\n", len(missingDirs))
+
+	// clone dirs that don't exist
 	sshPath := fmt.Sprintf("%s/.ssh/id_rsa", homeDir)
 	auth, err := ssh.NewPublicKeysFromFile("git", sshPath, "")
-	if err != nil {
-		fmt.Printf("error setting up ssh pub key; err: %+v;\n", err)
-		return err
-	}
+	for _, repoConfig := range missingDirs {
+		labeledDirName := util.GetLabeledDirName(repoConfig)
 
-	fmt.Printf("cloning git repo: %s;\n", repo)
-	gitRepo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
-		URL:      repo,
-		Auth:     auth,
-		Progress: os.Stdout,
-	})
-	if errors.Is(err, git.ErrRepositoryAlreadyExists) {
-		fmt.Println("repository already exist. skipping...")
-	} else if err != nil {
-		fmt.Printf("error cloning git repository; err: %+v;\n", err)
-		return err
-	}
+		fmt.Printf("began pulling\t\t: [%s]\n", labeledDirName)
 
-	// clean up and switch branch
-	if len(cmd.String("branch")) != 0 && gitRepo != nil {
-		fmt.Printf("found branch option, switching to branch: %s;\n", cmd.String("branch"))
-
-		workTree, err := gitRepo.Worktree()
-		if err != nil {
-			fmt.Printf("error getting git work tree. err: %s", err)
-			return err
+		cloneOps := git.CloneOptions{
+			URL:  repoConfig.Remote,
+			Auth: auth,
 		}
-		if workTree == nil {
-			fmt.Print("error getting git work tree. nil work tree")
-			return errors.New("nil work tree")
+		if repoConfig.Branch != nil {
+			branchRef := fmt.Sprintf("refs/heads/%s", *repoConfig.Branch)
+			refName := plumbing.ReferenceName(branchRef)
+			cloneOps.ReferenceName = refName
+			cloneOps.SingleBranch = true
 		}
-		err = gitRepo.Fetch(&git.FetchOptions{
-			Prune:    true,
-			RefSpecs: []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD"},
-		})
-		if err != nil {
-			fmt.Printf("error fetching from git repository. err: %+v\n", err)
+
+		cloneDir := path.Join(gitDir, labeledDirName)
+		_, err := git.PlainClone(cloneDir, false, &cloneOps)
+		if errors.Is(err, git.ErrRepositoryAlreadyExists) {
+			fmt.Println("repository already exist. skipping...")
+		} else if err != nil {
+			fmt.Printf("error cloning git repository; err: %+v;\n", err)
 			return err
 		}
 
-		branchRef := fmt.Sprintf("refs/heads/%s", cmd.String("branch"))
-		err = workTree.Checkout(&git.CheckoutOptions{
-			Branch: plumbing.ReferenceName(branchRef),
-			Force:  true,
-		})
-		if err != nil {
-			fmt.Printf("error checking out branch. err: %s", err)
-			return err
-		}
-
-		branch := cmd.String("branch")
-		newRepoConfig.Branch = &branch
-
-		fmt.Printf("successfully, switched to branch: %s;\n", cmd.String("branch"))
+		fmt.Printf("finished pulling\t: [%s]\n", labeledDirName)
 	}
 
-	configPath := path.Join(homeDir, BASE_CONFIG_DIR, conf)
-	_, err = os.Stat(configPath)
-	// if config exist, we move it to another place.
-	if !errors.Is(err, os.ErrNotExist) {
-		hideConf := fmt.Sprintf("%s-old", conf)
-		hideConfigPath := path.Join(homeDir, BASE_CONFIG_DIR, hideConf)
-		fmt.Printf("config already exists at: %s\n", configPath)
-		fmt.Printf("do you with to hide the old config to: %s?\n", hideConfigPath)
-		fmt.Print("(y/n):")
+	// TODO: update dirs that do exist
 
-	input_loop:
-		for {
-			var i string
-			fmt.Scan(&i)
-			i = strings.ToLower(i)
-			i = strings.TrimSpace(i)
+	// setup sym links
+	fmt.Println("resolving symlinks")
+	for _, repoConfig := range repoConfigs {
+		labeledDirName := util.GetLabeledDirName(repoConfig)
 
-			switch i {
-			case "y":
-				fmt.Println("moving old config")
-				// gopls doesn't like it if I don't tag the loop like WHAT???
-				break input_loop
+		internalConfigPath := ""
+		if repoConfig.Path != nil {
+			internalConfigPath = *repoConfig.Path
+		}
 
-			case "n":
-				fmt.Println("old config is conflicting with new config, aborting...")
-				return nil
+		clonedConfigPath := path.Join(gitDir, labeledDirName, internalConfigPath)
+		configPath := path.Join(homeDir, BASE_CONFIG_DIR, repoConfig.Name)
 
-			default:
-				fmt.Print("invalid input, please pick (y/n):")
+		info, err := os.Lstat(configPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("error lstatting path: %s. err: %s\n", configPath, err)
+			return err
+		}
+		if info != nil {
+			if info.Mode().Type() != os.ModeSymlink.Type() {
+				oldConfigReplaceName := fmt.Sprintf("%s-old", repoConfig.Name)
+				oldConfigReplacePath := path.Join(homeDir, BASE_CONFIG_DIR, oldConfigReplaceName)
+				fmt.Printf("existing config found at: %s\n", configPath)
+				fmt.Println("would you like to replace the config file?")
+				fmt.Printf("(old config will be moved to: %s)\n", oldConfigReplacePath)
+				fmt.Print("(y/n):")
+
+				var i string
+				fmt.Scan(&i)
+
+				switch strings.ToLower(i) {
+				case "y":
+					fmt.Println("replacing old config")
+					err := os.Rename(configPath, oldConfigReplacePath)
+					if err != nil {
+						fmt.Printf("error renaming old config. err: %s", err)
+						return err
+					}
+
+				case "default":
+					fallthrough
+				case "n":
+					fmt.Printf("skipping %s for now...", repoConfig.Name)
+					continue
+				}
+				continue
+			} else {
+				// existing symlink
+				syml, err := os.Readlink(configPath)
+				if err != nil {
+					fmt.Printf("error resolving symlink: %s. err: %s", configPath, err)
+					return err
+				}
+
+				if syml == clonedConfigPath {
+					// already configured correctly
+					continue
+				}
+
+				// clean up incorrect symlink
+				os.Remove(configPath)
 			}
 		}
 
-		err := os.Rename(configPath, hideConfigPath)
+		fmt.Printf("linking: %s \t -> %s.\n", clonedConfigPath, configPath)
+		err = os.Symlink(clonedConfigPath, configPath)
 		if err != nil {
-			fmt.Printf("error moving config %s to %s. err: %+v", configPath, hideConfigPath, err)
+			fmt.Printf("error creating symlink from %s to %s. err: %+v", clonedConfigPath, configPath, err)
 			return err
 		}
 	}
-
-	fmt.Println("creating sym link.")
-	err = os.Symlink(cloneDir, configPath)
-	if err != nil {
-		fmt.Printf("error creating symlink from %s to %s. err: %+v", cloneDir, configPath, err)
-		return err
-	}
-
-	rcfg, err := reconConfig.GetConfigFromFile()
-	if err != nil {
-		fmt.Printf("error reading config file. err: %s", err)
-		return err
-	}
-
-	rcfg.Repos = append(rcfg.Repos, newRepoConfig)
-	err = reconConfig.SaveConfigToFile(*rcfg)
-	if err != nil {
-		fmt.Printf("error saving config file. err: %s", err)
-		return err
-	}
-
-	return nil
-}
-
-func pullFunc(ctx context.Context, cmd *cli.Command) error {
-	if cmd.NArg() < 1 {
-		fmt.Println("please input valid config.")
-		return errors.New("incorrect config")
-	}
-	conf := cmd.Args().Get(0)
-	if len(conf) == 0 {
-		fmt.Println("please input valid config.")
-		return errors.New("incorrect config")
-	}
-
-	fmt.Printf("pulling latest for config: %s\n", conf)
-	homeDir := os.Getenv("HOME")
-	repoPath := path.Join(homeDir, GIT_DIRS, conf)
-	gitRepo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		fmt.Printf("error opening git repository. err %+v", err)
-		return err
-	}
-
-	var branchRef string
-	branch, err := gitRepo.Head()
-	branchRef = branch.Name().String()
-	if err != nil {
-		fmt.Printf("error getting repo branch. err %+v", err)
-		return err
-	}
-	if len(cmd.String("branch")) != 0 {
-		branchRef = fmt.Sprintf("refs/heads/%s", cmd.String("branch"))
-	}
-	fmt.Printf("branch ref: %s.\n", branch.Name())
-
-	workTree, err := gitRepo.Worktree()
-	if err != nil {
-		fmt.Printf("error getting git work tree. err: %s", err)
-		return err
-	}
-
-	err = workTree.Pull(&git.PullOptions{
-		// Force:        true,
-		// SingleBranch: true,
-		Progress:      os.Stdout,
-		RemoteName:    "origin",
-		ReferenceName: plumbing.ReferenceName(branchRef),
-	})
-	if errors.Is(err, git.NoErrAlreadyUpToDate) {
-		fmt.Println("cofig repo already up to date.")
-		return err
-	} else if err != nil {
-		fmt.Printf("error pulling latest config. err: %s", err)
-		return err
-	}
-	fmt.Println("finished pulling latest config")
 
 	return nil
 }
