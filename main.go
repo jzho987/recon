@@ -155,7 +155,7 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 	// TODO: update dirs that do exist
 
 	// setup sym links
-	fmt.Println("resolving symlinks")
+	symLinksCreatedMetric := 0
 	for _, repoConfig := range repoConfigs {
 		labeledDirName := util.GetLabeledDirName(repoConfig)
 
@@ -224,7 +224,10 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 			fmt.Printf("error creating symlink from %s to %s. err: %+v", clonedConfigPath, configPath, err)
 			return err
 		}
+		symLinksCreatedMetric += 1
 	}
+
+	fmt.Printf("resolving %d symlink.", symLinksCreatedMetric)
 
 	return nil
 }

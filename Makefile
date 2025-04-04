@@ -1,5 +1,6 @@
-build:
-	go build .
+build: build-dir
+	go build . && mv recon ./bin/recon
 
-update-local: build
-	sudo cp ./recon /usr/local/bin/recon
+build-dir:
+	mkdir bin
+
