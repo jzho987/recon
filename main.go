@@ -108,7 +108,7 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 
 	missingDirs := make([]reconConfig.RepoConfig, 0)
 	existingDirs := make([]reconConfig.RepoConfig, 0)
-	missingRemotes := make(map[string]bool, 0)
+	cloneRepos := make(map[string]reconConfig.RepoConfig, 0)
 	for _, repoConfig := range repoConfigs {
 		labeledDirName, err := util.GetLabeledDirName(repoConfig)
 		if err != nil {
@@ -120,16 +120,17 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 			continue
 		}
 
+		cloneRepos[labeledDirName] = repoConfig
 		missingDirs = append(missingDirs, repoConfig)
 	}
 
-	fmt.Printf("found %d missing repos.\n", len(missingDirs))
+	fmt.Printf("found %d missing repos.\n", len(cloneRepos))
 
 	// clone dirs that don't exist
 	sshPath := fmt.Sprintf("%s/.ssh/id_rsa", homeDir)
 	auth, err := ssh.NewPublicKeysFromFile("git", sshPath, "")
 	var eg errgroup.Group
-	for _, repoConfig := range missingDirs {
+	for _, repoConfig := range cloneRepos {
 		eg.Go(func() error {
 			labeledDirName, err := util.GetLabeledDirName(repoConfig)
 			if err != nil {
@@ -194,12 +195,12 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 		}
 		if info != nil {
 			if info.Mode().Type() != os.ModeSymlink.Type() {
-				oldConfigReplaceName := fmt.Sprintf("%s-old", repoConfig.Name)
+				oldConfigReplaceName := fmt.Sprintf(".%s-old", repoConfig.Name)
 				oldConfigReplacePath := path.Join(homeDir, BASE_CONFIG_DIR, oldConfigReplaceName)
 				fmt.Printf("existing config found at: %s\n", configPath)
 				fmt.Println("would you like to replace the config file?")
 				fmt.Printf("(old config will be moved to: %s)\n", oldConfigReplacePath)
-				fmt.Print("(y/n):")
+				fmt.Print("(y/n): ")
 
 				var i string
 				fmt.Scan(&i)
@@ -213,13 +214,12 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 						return err
 					}
 
-				case "default":
-					fallthrough
 				case "n":
+					fallthrough
+				default:
 					fmt.Printf("skipping %s for now...", repoConfig.Name)
 					continue
 				}
-				continue
 			} else {
 				// existing symlink
 				syml, err := os.Readlink(configPath)
@@ -247,7 +247,7 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 		symLinksCreatedMetric += 1
 	}
 
-	fmt.Printf("resolving %d symlink.", symLinksCreatedMetric)
+	fmt.Printf("resolved %d symlink.", symLinksCreatedMetric)
 
 	return nil
 }

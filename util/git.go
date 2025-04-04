@@ -80,8 +80,6 @@ func GetLabeledDirName(repoConfig config.RepoConfig) (string, error) {
 		return "", fmt.Errorf("malfored git remote: %s", remote)
 	}
 
-	fmt.Printf("%+v\n", remoteTrimList)
-
 	repository := remote[len(remoteTrimList[0])+1:]
 	repository = strings.TrimSuffix(repository, GIT_SSH_SUFFIX)
 	repository = strings.Replace(repository, "/", "_", 1)
