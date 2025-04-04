@@ -13,6 +13,10 @@ import (
 	"github.com/jzho987/recon/config"
 )
 
+const (
+	GIT_SSH_SUFFIX = ".git"
+)
+
 // State of the local repository
 type RepoState struct {
 	Hash   string
@@ -68,8 +72,19 @@ func GetAllRepoState(dirPath string) (map[string]RepoState, error) {
 	return repoStates, nil
 }
 
-func GetLabeledDirName(repoConfig config.RepoConfig) string {
-	dirName := repoConfig.Name
+func GetLabeledDirName(repoConfig config.RepoConfig) (string, error) {
+	remote := repoConfig.Remote
+	remoteTrimList := strings.Split(remote, ":")
+
+	if len(remoteTrimList) < 2 {
+		return "", fmt.Errorf("malfored git remote: %s", remote)
+	}
+
+	fmt.Printf("%+v\n", remoteTrimList)
+
+	repository := remote[len(remoteTrimList[0])+1:]
+	repository = strings.TrimSuffix(repository, GIT_SSH_SUFFIX)
+	repository = strings.Replace(repository, "/", "_", 1)
 
 	if repoConfig.Version != nil || repoConfig.Branch != nil {
 		refMode := "version"
@@ -79,10 +94,10 @@ func GetLabeledDirName(repoConfig config.RepoConfig) string {
 			refName = repoConfig.Branch
 		}
 
-		cleanedName := strings.Replace(dirName, "-", "_", -1)
+		cleanedName := strings.Replace(repository, "-", "_", -1)
 		cleanedRefName := strings.Replace(*refName, "-", "_", -1)
-		dirName = fmt.Sprintf("%s-%s:%s", cleanedName, refMode, cleanedRefName)
+		repository = fmt.Sprintf("%s-%s:%s", cleanedName, refMode, cleanedRefName)
 	}
 
-	return dirName
+	return repository, nil
 }

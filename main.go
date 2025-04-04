@@ -14,27 +14,24 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/sync/errgroup"
 
 	reconConfig "github.com/jzho987/recon/config"
 	"github.com/jzho987/recon/util"
 )
 
-const (
-	BASE_CONFIG_DIR = ".config"
-	GIT_DIRS        = ".config/recon/git-dirs/"
-	DB_FILE         = ".config/recon/.data"
-)
+const BASE_CONFIG_DIR = ".config"
 
 func main() {
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
 			{
-				Name: "config",
+				Name:  "config",
+				Usage: "debug configurations.",
 				Commands: []*cli.Command{
 					{
 						Name: "get",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-
 							rcfg, err := reconConfig.GetConfigFromFile()
 							spew.Dump(rcfg)
 
@@ -56,6 +53,7 @@ func main() {
 			},
 		},
 	}
+
 	err := cmd.Run(context.Background(), os.Args)
 	if err != nil {
 		log.Fatal(err)
@@ -92,7 +90,7 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 
 	// get existing git dirs
 	homeDir := os.Getenv("HOME")
-	gitDir := path.Join(homeDir, GIT_DIRS)
+	gitDir := path.Join(homeDir, rcfg.CloneDir)
 	entries, err := os.ReadDir(gitDir)
 	if err != nil {
 		return err
@@ -110,12 +108,18 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 
 	missingDirs := make([]reconConfig.RepoConfig, 0)
 	existingDirs := make([]reconConfig.RepoConfig, 0)
+	missingRemotes := make(map[string]bool, 0)
 	for _, repoConfig := range repoConfigs {
-		labeledDirName := util.GetLabeledDirName(repoConfig)
+		labeledDirName, err := util.GetLabeledDirName(repoConfig)
+		if err != nil {
+			fmt.Printf("error getting clone destination directory name. err: %s", err)
+			return err
+		}
 		if existingDirSet[labeledDirName] {
 			existingDirs = append(existingDirs, repoConfig)
 			continue
 		}
+
 		missingDirs = append(missingDirs, repoConfig)
 	}
 
@@ -124,32 +128,44 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 	// clone dirs that don't exist
 	sshPath := fmt.Sprintf("%s/.ssh/id_rsa", homeDir)
 	auth, err := ssh.NewPublicKeysFromFile("git", sshPath, "")
+	var eg errgroup.Group
 	for _, repoConfig := range missingDirs {
-		labeledDirName := util.GetLabeledDirName(repoConfig)
+		eg.Go(func() error {
+			labeledDirName, err := util.GetLabeledDirName(repoConfig)
+			if err != nil {
+				fmt.Printf("error getting clone destination directory name. err: %s", err)
+				return err
+			}
 
-		fmt.Printf("began pulling\t\t: [%s]\n", labeledDirName)
+			fmt.Printf("began pulling\t\t: [%s]\n", labeledDirName)
 
-		cloneOps := git.CloneOptions{
-			URL:  repoConfig.Remote,
-			Auth: auth,
-		}
-		if repoConfig.Branch != nil {
-			branchRef := fmt.Sprintf("refs/heads/%s", *repoConfig.Branch)
-			refName := plumbing.ReferenceName(branchRef)
-			cloneOps.ReferenceName = refName
-			cloneOps.SingleBranch = true
-		}
+			cloneOps := git.CloneOptions{
+				URL:  repoConfig.Remote,
+				Auth: auth,
+			}
+			if repoConfig.Branch != nil {
+				branchRef := fmt.Sprintf("refs/heads/%s", *repoConfig.Branch)
+				refName := plumbing.ReferenceName(branchRef)
+				cloneOps.ReferenceName = refName
+				cloneOps.SingleBranch = true
+			}
 
-		cloneDir := path.Join(gitDir, labeledDirName)
-		_, err := git.PlainClone(cloneDir, false, &cloneOps)
-		if errors.Is(err, git.ErrRepositoryAlreadyExists) {
-			fmt.Println("repository already exist. skipping...")
-		} else if err != nil {
-			fmt.Printf("error cloning git repository; err: %+v;\n", err)
-			return err
-		}
+			cloneDir := path.Join(gitDir, labeledDirName)
+			_, err = git.PlainClone(cloneDir, false, &cloneOps)
+			if errors.Is(err, git.ErrRepositoryAlreadyExists) {
+				fmt.Println("repository already exist. skipping...")
+			} else if err != nil {
+				fmt.Printf("error cloning git repository; err: %+v;\n", err)
+				return err
+			}
 
-		fmt.Printf("finished pulling\t: [%s]\n", labeledDirName)
+			fmt.Printf("finished pulling\t: [%s]\n", labeledDirName)
+			return nil
+		})
+	}
+	err = eg.Wait()
+	if err != nil {
+		return err
 	}
 
 	// TODO: update dirs that do exist
@@ -157,7 +173,11 @@ func syncFunc(ctx context.Context, cmd *cli.Command) error {
 	// setup sym links
 	symLinksCreatedMetric := 0
 	for _, repoConfig := range repoConfigs {
-		labeledDirName := util.GetLabeledDirName(repoConfig)
+		labeledDirName, err := util.GetLabeledDirName(repoConfig)
+		if err != nil {
+			fmt.Printf("error getting clone destination directory name. err: %s", err)
+			return err
+		}
 
 		internalConfigPath := ""
 		if repoConfig.Path != nil {

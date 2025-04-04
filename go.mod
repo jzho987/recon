@@ -7,6 +7,7 @@ require (
 	github.com/go-git/go-git/v5 v5.14.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/urfave/cli/v3 v3.0.0-beta1
+	golang.org/x/sync v0.12.0
 )
 
 require (

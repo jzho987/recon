@@ -1,6 +1,3 @@
-build: build-dir
+build:
 	go build . && mv recon ./bin/recon
-
-build-dir:
-	mkdir bin
 

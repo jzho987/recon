@@ -7,10 +7,19 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const RECON_CONFIG_FILE = ".config/recon/recon.toml"
+const (
+	// main
+	RECON_CONFIG_FILE = ".config/recon/recon.toml"
+
+	// defaults
+	DEFAULT_CLONE_DIR = ".config/recon/git-dirs/"
+)
 
 // All the config options for recon.
 type ReconConfig struct {
+	// Location to clone git repositories
+	CloneDir string `toml:"clone_dir"`
+
 	// List of repositories to sync with
 	Repos []RepoConfig `toml:"repos"`
 }
@@ -35,18 +44,22 @@ type RepoConfig struct {
 }
 
 func GetConfigFromFile() (*ReconConfig, error) {
+	// get config
 	homeDir := os.Getenv("HOME")
 	configFilePath := path.Join(homeDir, RECON_CONFIG_FILE)
-
 	configFile, err := os.ReadFile(configFilePath)
 	if err != nil {
 		return nil, err
 	}
-
 	var config ReconConfig
 	err = toml.Unmarshal([]byte(configFile), &config)
 	if err != nil {
 		return nil, err
+	}
+
+	// set defaults
+	if len(config.CloneDir) == 0 {
+		config.CloneDir = DEFAULT_CLONE_DIR
 	}
 
 	return &config, nil
